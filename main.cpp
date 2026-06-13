@@ -28,6 +28,116 @@ struct ResultadoEjecucion {
     std::string archivoVoronoi;
 };
 
+struct Caja {
+    double minX;
+    double maxX;
+    double minY;
+    double maxY;
+};
+
+struct DimensionesImagen {
+    int ancho;
+    int alto;
+};
+
+bool parecenPorcentajes(const vector<Punto>& puntos) {
+    if (puntos.empty()) {
+        return false;
+    }
+
+    for (const auto& punto : puntos) {
+        if (punto.x < 0.0 || punto.x > 100.0 || punto.y < 0.0 || punto.y > 100.0) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+Punto escalarPunto(const Punto& punto, const DimensionesImagen& imagen, bool esPorcentaje) {
+    if (!esPorcentaje) {
+        return punto;
+    }
+
+    return Punto((punto.x / 100.0) * (imagen.ancho - 1), (punto.y / 100.0) * (imagen.alto - 1));
+}
+
+vector<Punto> escalarPuntos(const vector<Punto>& puntos, const DimensionesImagen& imagen, bool esPorcentaje) {
+    vector<Punto> escalados;
+    escalados.reserve(puntos.size());
+    for (const auto& punto : puntos) {
+        escalados.push_back(escalarPunto(punto, imagen, esPorcentaje));
+    }
+    return escalados;
+}
+
+DimensionesImagen leerDimensionesJPEG(const fs::path& archivoImagen) {
+    std::ifstream archivo(archivoImagen, std::ios::binary);
+    if (!archivo) {
+        throw std::runtime_error("No se pudo abrir la imagen: " + archivoImagen.string());
+    }
+
+    unsigned char byte1 = 0;
+    unsigned char byte2 = 0;
+    archivo.read(reinterpret_cast<char*>(&byte1), 1);
+    archivo.read(reinterpret_cast<char*>(&byte2), 1);
+    if (byte1 != 0xFF || byte2 != 0xD8) {
+        throw std::runtime_error("La imagen no parece ser JPEG: " + archivoImagen.string());
+    }
+
+    while (archivo) {
+        unsigned char marcador = 0;
+        archivo.read(reinterpret_cast<char*>(&marcador), 1);
+        if (!archivo || marcador != 0xFF) {
+            continue;
+        }
+
+        do {
+            archivo.read(reinterpret_cast<char*>(&marcador), 1);
+        } while (archivo && marcador == 0xFF);
+
+        if (!archivo) {
+            break;
+        }
+
+        if (marcador == 0xD9 || marcador == 0xDA) {
+            break;
+        }
+
+        unsigned char alto1 = 0;
+        unsigned char alto2 = 0;
+        unsigned char ancho1 = 0;
+        unsigned char ancho2 = 0;
+        unsigned char longitud1 = 0;
+        unsigned char longitud2 = 0;
+
+        archivo.read(reinterpret_cast<char*>(&longitud1), 1);
+        archivo.read(reinterpret_cast<char*>(&longitud2), 1);
+        int longitud = (static_cast<int>(longitud1) << 8) | static_cast<int>(longitud2);
+
+        if (longitud < 7) {
+            throw std::runtime_error("Marcador JPEG invalido en " + archivoImagen.string());
+        }
+
+        if (marcador >= 0xC0 && marcador <= 0xC3) {
+            unsigned char precision = 0;
+            archivo.read(reinterpret_cast<char*>(&precision), 1);
+            archivo.read(reinterpret_cast<char*>(&alto1), 1);
+            archivo.read(reinterpret_cast<char*>(&alto2), 1);
+            archivo.read(reinterpret_cast<char*>(&ancho1), 1);
+            archivo.read(reinterpret_cast<char*>(&ancho2), 1);
+
+            int alto = (static_cast<int>(alto1) << 8) | static_cast<int>(alto2);
+            int ancho = (static_cast<int>(ancho1) << 8) | static_cast<int>(ancho2);
+            return {ancho, alto};
+        }
+
+        archivo.seekg(longitud - 2 - 2, std::ios::cur);
+    }
+
+    throw std::runtime_error("No se pudieron leer las dimensiones JPEG de " + archivoImagen.string());
+}
+
 vector<Punto> leerPuntos(const std::string& nombreArchivo) {
     std::ifstream archivo(nombreArchivo);
     vector<Punto> puntos;
@@ -141,6 +251,10 @@ double productoCruz(const Punto& o, const Punto& a, const Punto& b) {
     return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
 }
 
+bool trianguloDegenerado(const Triangulo& triangulo) {
+    return std::abs(productoCruz(triangulo.a, triangulo.b, triangulo.c)) < 1e-9;
+}
+
 size_t calcularCascoConvexo(const vector<Punto>& puntos) {
     if (puntos.size() <= 2) {
         return puntos.size();
@@ -187,6 +301,9 @@ vector<Punto> obtenerVerticesVoronoiUnicos(const vector<Triangulo>& triangulacio
     vector<Punto> verticesVoronoi;
 
     for (const auto& triangulo : triangulacion) {
+        if (trianguloDegenerado(triangulo)) {
+            continue;
+        }
         Punto circuncentro = triangulo.circuncentro();
         if (std::find(verticesVoronoi.begin(), verticesVoronoi.end(), circuncentro) == verticesVoronoi.end()) {
             verticesVoronoi.push_back(circuncentro);
@@ -204,6 +321,10 @@ vector<Arista> construirVoronoi(const vector<Triangulo>& triangulacion) {
             const Triangulo& t1 = triangulacion[i];
             const Triangulo& t2 = triangulacion[j];
 
+            if (trianguloDegenerado(t1) || trianguloDegenerado(t2)) {
+                continue;
+            }
+
             if (comparten2Vertices(t1, t2)) {
                 Punto c1 = t1.circuncentro();
                 Punto c2 = t2.circuncentro();
@@ -213,6 +334,90 @@ vector<Arista> construirVoronoi(const vector<Triangulo>& triangulacion) {
     }
 
     return aristasVoronoi;
+}
+
+Caja construirCajaDominio(const DimensionesImagen& imagen) {
+    return {0.0, static_cast<double>(imagen.ancho - 1), 0.0, static_cast<double>(imagen.alto - 1)};
+}
+
+bool recortarSegmento(const Arista& entrada, const Caja& caja, Arista& salida) {
+    double x1 = entrada.p1.x;
+    double y1 = entrada.p1.y;
+    double x2 = entrada.p2.x;
+    double y2 = entrada.p2.y;
+
+    double dx = x2 - x1;
+    double dy = y2 - y1;
+
+    double t0 = 0.0;
+    double t1 = 1.0;
+
+    auto ajustar = [&](double p, double q) -> bool {
+        if (std::abs(p) < 1e-12) {
+            return q >= 0.0;
+        }
+
+        double r = q / p;
+        if (p < 0.0) {
+            if (r > t1) {
+                return false;
+            }
+            if (r > t0) {
+                t0 = r;
+            }
+        } else {
+            if (r < t0) {
+                return false;
+            }
+            if (r < t1) {
+                t1 = r;
+            }
+        }
+        return true;
+    };
+
+    if (!ajustar(-dx, x1 - caja.minX)) {
+        return false;
+    }
+    if (!ajustar(dx, caja.maxX - x1)) {
+        return false;
+    }
+    if (!ajustar(-dy, y1 - caja.minY)) {
+        return false;
+    }
+    if (!ajustar(dy, caja.maxY - y1)) {
+        return false;
+    }
+
+    auto limitar = [](double valor, double minimo, double maximo) {
+        return std::max(minimo, std::min(valor, maximo));
+    };
+
+    Punto q1(
+        limitar(x1 + t0 * dx, caja.minX, caja.maxX),
+        limitar(y1 + t0 * dy, caja.minY, caja.maxY));
+    Punto q2(
+        limitar(x1 + t1 * dx, caja.minX, caja.maxX),
+        limitar(y1 + t1 * dy, caja.minY, caja.maxY));
+    if (q1 == q2) {
+        return false;
+    }
+
+    salida = Arista(q1, q2);
+    return true;
+}
+
+vector<Arista> recortarAristasAlDominio(const vector<Arista>& aristas, const Caja& caja) {
+    vector<Arista> recortadas;
+    for (const auto& arista : aristas) {
+        Arista recortada;
+        if (recortarSegmento(arista, caja, recortada)) {
+            if (std::find(recortadas.begin(), recortadas.end(), recortada) == recortadas.end()) {
+                recortadas.push_back(recortada);
+            }
+        }
+    }
+    return recortadas;
 }
 
 vector<Triangulo> bowyerWatson(const vector<Punto>& puntos) {
@@ -228,6 +433,9 @@ vector<Triangulo> bowyerWatson(const vector<Punto>& puntos) {
         vector<Triangulo> triangulosInvalidos;
 
         for (const auto& triangulo : triangulacion) {
+            if (trianguloDegenerado(triangulo)) {
+                continue;
+            }
             Circuncirculo circulo(triangulo);
             if (circulo.contiene(punto)) {
                 triangulosInvalidos.push_back(triangulo);
@@ -254,7 +462,10 @@ vector<Triangulo> bowyerWatson(const vector<Punto>& puntos) {
         triangulacion = triangulacionActualizada;
 
         for (const auto& arista : cavidad) {
-            triangulacion.push_back(Triangulo(arista.p1, arista.p2, punto));
+            Triangulo nuevoTriangulo(arista.p1, arista.p2, punto);
+            if (!trianguloDegenerado(nuevoTriangulo)) {
+                triangulacion.push_back(nuevoTriangulo);
+            }
         }
     }
 
@@ -332,8 +543,10 @@ vector<fs::path> obtenerEntradasPuntos(const fs::path& carpetaPuntos) {
     return entradas;
 }
 
-ResultadoEjecucion ejecutarCaso(const fs::path& archivoEntrada, const fs::path& carpetaSalida) {
-    vector<Punto> puntos = leerPuntos(archivoEntrada.string());
+ResultadoEjecucion ejecutarCaso(const fs::path& archivoEntrada, const fs::path& carpetaSalida, const DimensionesImagen& imagen) {
+    vector<Punto> puntosCrudos = leerPuntos(archivoEntrada.string());
+    bool usaPorcentajes = parecenPorcentajes(puntosCrudos);
+    vector<Punto> puntos = escalarPuntos(puntosCrudos, imagen, usaPorcentajes);
     if (puntos.empty()) {
         throw std::runtime_error("No se pudieron leer puntos desde " + archivoEntrada.string());
     }
@@ -341,7 +554,9 @@ ResultadoEjecucion ejecutarCaso(const fs::path& archivoEntrada, const fs::path& 
     auto tInicio = std::chrono::steady_clock::now();
     vector<Triangulo> triangulacion = bowyerWatson(puntos);
     vector<Punto> verticesVoronoi = obtenerVerticesVoronoiUnicos(triangulacion);
-    vector<Arista> aristasVoronoi = construirVoronoi(triangulacion);
+    Caja cajaDominio = construirCajaDominio(imagen);
+    vector<Arista> aristasVoronoiBrutas = construirVoronoi(triangulacion);
+    vector<Arista> aristasVoronoi = recortarAristasAlDominio(aristasVoronoiBrutas, cajaDominio);
     vector<Arista> aristasDelaunay = extraerAristasDelaunay(triangulacion);
     auto tFin = std::chrono::steady_clock::now();
 
@@ -409,6 +624,7 @@ int main(int argc, char* argv[]) {
     try {
         fs::path carpetaPuntos = "puntos";
         fs::path carpetaSalida = "salidas";
+        fs::path archivoImagen = "imagen.jpg";
 
         if (argc >= 2) {
             carpetaPuntos = argv[1];
@@ -416,8 +632,12 @@ int main(int argc, char* argv[]) {
         if (argc >= 3) {
             carpetaSalida = argv[2];
         }
+        if (argc >= 4) {
+            archivoImagen = argv[3];
+        }
 
         fs::create_directories(carpetaSalida);
+        DimensionesImagen dimensionesImagen = leerDimensionesJPEG(archivoImagen);
         vector<fs::path> archivos = obtenerEntradasPuntos(carpetaPuntos);
 
         if (archivos.empty()) {
@@ -427,7 +647,7 @@ int main(int argc, char* argv[]) {
 
         vector<ResultadoEjecucion> resultados;
         for (const auto& archivo : archivos) {
-            resultados.push_back(ejecutarCaso(archivo, carpetaSalida));
+            resultados.push_back(ejecutarCaso(archivo, carpetaSalida, dimensionesImagen));
         }
 
         guardarResumen(resultados, carpetaSalida / "resumen.csv");
