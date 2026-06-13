@@ -1,6 +1,10 @@
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 #include "arista.h"
@@ -9,6 +13,20 @@
 #include "triangulo.h"
 
 using std::vector;
+namespace fs = std::filesystem;
+
+struct ResultadoEjecucion {
+    int n;
+    size_t regiones;
+    size_t verticesVoronoi;
+    size_t aristasVoronoi;
+    size_t triangulos;
+    size_t k;
+    long long tiempoMs;
+    std::string archivoEntrada;
+    std::string archivoDelaunay;
+    std::string archivoVoronoi;
+};
 
 vector<Punto> leerPuntos(const std::string& nombreArchivo) {
     std::ifstream archivo(nombreArchivo);
@@ -112,6 +130,59 @@ bool comparten2Vertices(const Triangulo& t1, const Triangulo& t2) {
     return comunes == 2;
 }
 
+bool puntoMenorLexicografico(const Punto& a, const Punto& b) {
+    if (std::abs(a.x - b.x) > 1e-9) {
+        return a.x < b.x;
+    }
+    return a.y < b.y;
+}
+
+double productoCruz(const Punto& o, const Punto& a, const Punto& b) {
+    return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+}
+
+size_t calcularCascoConvexo(const vector<Punto>& puntos) {
+    if (puntos.size() <= 2) {
+        return puntos.size();
+    }
+
+    vector<Punto> ordenados = puntos;
+    std::sort(ordenados.begin(), ordenados.end(), puntoMenorLexicografico);
+    ordenados.erase(std::unique(ordenados.begin(), ordenados.end()), ordenados.end());
+
+    if (ordenados.size() <= 2) {
+        return ordenados.size();
+    }
+
+    vector<Punto> cascoInferior;
+    for (const auto& p : ordenados) {
+        while (cascoInferior.size() >= 2 &&
+               productoCruz(cascoInferior[cascoInferior.size() - 2], cascoInferior.back(), p) <= 1e-9) {
+            cascoInferior.pop_back();
+        }
+        cascoInferior.push_back(p);
+    }
+
+    vector<Punto> cascoSuperior;
+    for (int i = static_cast<int>(ordenados.size()) - 1; i >= 0; --i) {
+        const Punto& p = ordenados[i];
+        while (cascoSuperior.size() >= 2 &&
+               productoCruz(cascoSuperior[cascoSuperior.size() - 2], cascoSuperior.back(), p) <= 1e-9) {
+            cascoSuperior.pop_back();
+        }
+        cascoSuperior.push_back(p);
+    }
+
+    if (!cascoInferior.empty()) {
+        cascoInferior.pop_back();
+    }
+    if (!cascoSuperior.empty()) {
+        cascoSuperior.pop_back();
+    }
+
+    return cascoInferior.size() + cascoSuperior.size();
+}
+
 vector<Punto> obtenerVerticesVoronoiUnicos(const vector<Triangulo>& triangulacion) {
     vector<Punto> verticesVoronoi;
 
@@ -144,15 +215,6 @@ vector<Arista> construirVoronoi(const vector<Triangulo>& triangulacion) {
     return aristasVoronoi;
 }
 
-void imprimirReporteVoronoi(const vector<Punto>& puntos, const vector<Triangulo>& triangulacion) {
-    vector<Punto> verticesVoronoi = obtenerVerticesVoronoiUnicos(triangulacion);
-    vector<Arista> aristasVoronoi = construirVoronoi(triangulacion);
-
-    std::cout << "Número de regiones: " << puntos.size() << std::endl;
-    std::cout << "Número de vértices Voronoi: " << verticesVoronoi.size() << std::endl;
-    std::cout << "Número de aristas Voronoi: " << aristasVoronoi.size() << std::endl;
-}
-
 vector<Triangulo> bowyerWatson(const vector<Punto>& puntos) {
     if (puntos.empty()) {
         return {};
@@ -163,8 +225,6 @@ vector<Triangulo> bowyerWatson(const vector<Punto>& puntos) {
     triangulacion.push_back(superTriangulo);
 
     for (const auto& punto : puntos) {
-        punto.imprimir();
-
         vector<Triangulo> triangulosInvalidos;
 
         for (const auto& triangulo : triangulacion) {
@@ -172,11 +232,6 @@ vector<Triangulo> bowyerWatson(const vector<Punto>& puntos) {
             if (circulo.contiene(punto)) {
                 triangulosInvalidos.push_back(triangulo);
             }
-        }
-
-        std::cout << "Triangulos invalidos encontrados: " << triangulosInvalidos.size() << std::endl;
-        for (const auto& triangulo : triangulosInvalidos) {
-            triangulo.imprimir();
         }
 
         vector<Arista> cavidad = construirCavidad(triangulosInvalidos);
@@ -213,25 +268,173 @@ vector<Triangulo> bowyerWatson(const vector<Punto>& puntos) {
     return triangulacionFinal;
 }
 
-void imprimirTriangulacion(const vector<Triangulo>& triangulacion) {
-    std::cout << "Triangulacion final (" << triangulacion.size() << " triangulos):" << std::endl;
+vector<Arista> extraerAristasDelaunay(const vector<Triangulo>& triangulacion) {
+    vector<Arista> aristas;
+
     for (const auto& triangulo : triangulacion) {
-        triangulo.imprimir();
+        for (const auto& arista : aristasDeTriangulo(triangulo)) {
+            if (std::find(aristas.begin(), aristas.end(), arista) == aristas.end()) {
+                aristas.push_back(arista);
+            }
+        }
+    }
+
+    return aristas;
+}
+
+void guardarAristas(const vector<Arista>& aristas, const std::string& archivoSalida) {
+    std::ofstream salida(archivoSalida);
+    for (const auto& arista : aristas) {
+        salida << arista.p1.x << " " << arista.p1.y << " "
+               << arista.p2.x << " " << arista.p2.y << "\n";
     }
 }
 
-int main() {
-    try {
-        vector<Punto> puntos = leerPuntos("puntos.txt");
+int extraerN(const std::string& nombreArchivo) {
+    std::string numero;
+    for (char c : nombreArchivo) {
+        if (std::isdigit(static_cast<unsigned char>(c))) {
+            numero.push_back(c);
+        } else if (!numero.empty()) {
+            break;
+        }
+    }
 
-        if (puntos.empty()) {
-            std::cerr << "No se pudieron leer puntos desde puntos.txt" << std::endl;
+    if (numero.empty()) {
+        return -1;
+    }
+
+    return std::stoi(numero);
+}
+
+vector<fs::path> obtenerEntradasPuntos(const fs::path& carpetaPuntos) {
+    vector<fs::path> entradas;
+
+    if (!fs::exists(carpetaPuntos) || !fs::is_directory(carpetaPuntos)) {
+        return entradas;
+    }
+
+    for (const auto& entrada : fs::directory_iterator(carpetaPuntos)) {
+        if (entrada.is_regular_file() && entrada.path().extension() == ".txt") {
+            entradas.push_back(entrada.path());
+        }
+    }
+
+    std::sort(entradas.begin(), entradas.end(), [](const fs::path& a, const fs::path& b) {
+        int na = extraerN(a.filename().string());
+        int nb = extraerN(b.filename().string());
+        if (na == nb) {
+            return a.filename().string() < b.filename().string();
+        }
+        return na < nb;
+    });
+
+    return entradas;
+}
+
+ResultadoEjecucion ejecutarCaso(const fs::path& archivoEntrada, const fs::path& carpetaSalida) {
+    vector<Punto> puntos = leerPuntos(archivoEntrada.string());
+    if (puntos.empty()) {
+        throw std::runtime_error("No se pudieron leer puntos desde " + archivoEntrada.string());
+    }
+
+    auto tInicio = std::chrono::steady_clock::now();
+    vector<Triangulo> triangulacion = bowyerWatson(puntos);
+    vector<Punto> verticesVoronoi = obtenerVerticesVoronoiUnicos(triangulacion);
+    vector<Arista> aristasVoronoi = construirVoronoi(triangulacion);
+    vector<Arista> aristasDelaunay = extraerAristasDelaunay(triangulacion);
+    auto tFin = std::chrono::steady_clock::now();
+
+    int n = extraerN(archivoEntrada.filename().string());
+    std::string sufijo = n > 0 ? std::to_string(n) : archivoEntrada.stem().string();
+
+    fs::path archivoDelaunay = carpetaSalida / ("delaunay_n" + sufijo + ".txt");
+    fs::path archivoVoronoi = carpetaSalida / ("voronoi_n" + sufijo + ".txt");
+
+    guardarAristas(aristasDelaunay, archivoDelaunay.string());
+    guardarAristas(aristasVoronoi, archivoVoronoi.string());
+
+    ResultadoEjecucion resultado;
+    resultado.n = n;
+    resultado.regiones = puntos.size();
+    resultado.verticesVoronoi = verticesVoronoi.size();
+    resultado.aristasVoronoi = aristasVoronoi.size();
+    resultado.triangulos = triangulacion.size();
+    resultado.k = calcularCascoConvexo(puntos);
+    resultado.tiempoMs = std::chrono::duration_cast<std::chrono::milliseconds>(tFin - tInicio).count();
+    resultado.archivoEntrada = archivoEntrada.string();
+    resultado.archivoDelaunay = archivoDelaunay.string();
+    resultado.archivoVoronoi = archivoVoronoi.string();
+    return resultado;
+}
+
+void guardarResumen(const vector<ResultadoEjecucion>& resultados, const fs::path& archivoResumen) {
+    std::ofstream salida(archivoResumen.string());
+    salida << "n,regiones,vertices_voronoi,aristas_voronoi,triangulos,k,teorico,delta,tiempo_ms\n";
+
+    for (const auto& r : resultados) {
+        long long teorico = static_cast<long long>(2 * r.regiones) - 2 - static_cast<long long>(r.k);
+        long long delta = static_cast<long long>(r.triangulos) - teorico;
+        salida << r.n << ","
+               << r.regiones << ","
+               << r.verticesVoronoi << ","
+               << r.aristasVoronoi << ","
+               << r.triangulos << ","
+               << r.k << ","
+               << teorico << ","
+               << delta << ","
+               << r.tiempoMs << "\n";
+    }
+}
+
+void imprimirResumenConsola(const vector<ResultadoEjecucion>& resultados) {
+    std::cout << "Resultados por caso:" << std::endl;
+    for (const auto& r : resultados) {
+        long long teorico = static_cast<long long>(2 * r.regiones) - 2 - static_cast<long long>(r.k);
+        long long delta = static_cast<long long>(r.triangulos) - teorico;
+        std::cout << "n=" << r.n
+                  << " regiones=" << r.regiones
+                  << " verticesVoronoi=" << r.verticesVoronoi
+                  << " aristasVoronoi=" << r.aristasVoronoi
+                  << " triangulos=" << r.triangulos
+                  << " k=" << r.k
+                  << " teorico=" << teorico
+                  << " delta=" << delta
+                  << " tiempoMs=" << r.tiempoMs
+                  << std::endl;
+    }
+}
+
+int main(int argc, char* argv[]) {
+    try {
+        fs::path carpetaPuntos = "puntos";
+        fs::path carpetaSalida = "salidas";
+
+        if (argc >= 2) {
+            carpetaPuntos = argv[1];
+        }
+        if (argc >= 3) {
+            carpetaSalida = argv[2];
+        }
+
+        fs::create_directories(carpetaSalida);
+        vector<fs::path> archivos = obtenerEntradasPuntos(carpetaPuntos);
+
+        if (archivos.empty()) {
+            std::cerr << "No se encontraron archivos .txt en " << carpetaPuntos.string() << std::endl;
             return 1;
         }
 
-        vector<Triangulo> triangulacion = bowyerWatson(puntos);
-        imprimirTriangulacion(triangulacion);
-        imprimirReporteVoronoi(puntos, triangulacion);
+        vector<ResultadoEjecucion> resultados;
+        for (const auto& archivo : archivos) {
+            resultados.push_back(ejecutarCaso(archivo, carpetaSalida));
+        }
+
+        guardarResumen(resultados, carpetaSalida / "resumen.csv");
+        imprimirResumenConsola(resultados);
+        std::cout << "Resumen guardado en " << (carpetaSalida / "resumen.csv").string() << std::endl;
+        std::cout << "Aristas exportadas en " << carpetaSalida.string() << std::endl;
+
     } catch (const std::exception& e) {
         std::cerr << e.what() << std::endl;
         return 1;
