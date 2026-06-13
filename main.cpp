@@ -1,33 +1,161 @@
+#include <algorithm>
+#include <fstream>
 #include <iostream>
+#include <string>
+#include <vector>
+#include "arista.h"
+#include "circuncirculo.h"
 #include "punto.h"
 #include "triangulo.h"
-#include "circuncirculo.h"
+
+using std::vector;
+
+vector<Punto> leerPuntos(const std::string& nombreArchivo) {
+    std::ifstream archivo(nombreArchivo);
+    vector<Punto> puntos;
+    double x, y;
+
+    while (archivo >> x >> y) {
+        puntos.push_back(Punto(x, y));
+    }
+
+    return puntos;
+}
+
+Triangulo crearSuperTriangulo(const vector<Punto>& puntos) {
+    double minX = puntos.front().x;
+    double minY = puntos.front().y;
+    double maxX = puntos.front().x;
+    double maxY = puntos.front().y;
+
+    for (const auto& punto : puntos) {
+        minX = std::min(minX, punto.x);
+        minY = std::min(minY, punto.y);
+        maxX = std::max(maxX, punto.x);
+        maxY = std::max(maxY, punto.y);
+    }
+
+    double dx = maxX - minX;
+    double dy = maxY - minY;
+    double deltaMax = std::max(dx, dy) * 10.0;
+    if (deltaMax < 1.0) {
+        deltaMax = 1.0;
+    }
+
+    double midX = (minX + maxX) / 2.0;
+    double midY = (minY + maxY) / 2.0;
+
+    Punto p1(midX - 20.0 * deltaMax, midY - deltaMax);
+    Punto p2(midX, midY + 20.0 * deltaMax);
+    Punto p3(midX + 20.0 * deltaMax, midY - deltaMax);
+
+    return Triangulo(p1, p2, p3);
+}
+
+vector<Arista> aristasDeTriangulo(const Triangulo& triangulo) {
+    return {Arista(triangulo.a, triangulo.b), Arista(triangulo.b, triangulo.c), Arista(triangulo.c, triangulo.a)};
+}
+
+bool triangulosIguales(const Triangulo& primero, const Triangulo& segundo) {
+    return primero.a == segundo.a && primero.b == segundo.b && primero.c == segundo.c;
+}
+
+bool contieneVerticeSuperTriangulo(const Triangulo& triangulo, const Triangulo& superTriangulo) {
+    return triangulo.a == superTriangulo.a || triangulo.a == superTriangulo.b || triangulo.a == superTriangulo.c ||
+           triangulo.b == superTriangulo.a || triangulo.b == superTriangulo.b || triangulo.b == superTriangulo.c ||
+           triangulo.c == superTriangulo.a || triangulo.c == superTriangulo.b || triangulo.c == superTriangulo.c;
+}
+
+vector<Triangulo> bowyerWatson(const vector<Punto>& puntos) {
+    if (puntos.empty()) {
+        return {};
+    }
+
+    Triangulo superTriangulo = crearSuperTriangulo(puntos);
+    vector<Triangulo> triangulacion;
+    triangulacion.push_back(superTriangulo);
+
+    for (const auto& punto : puntos) {
+        vector<Triangulo> triangulosInvalidos;
+
+        for (const auto& triangulo : triangulacion) {
+            Circuncirculo circulo(triangulo);
+            if (circulo.contiene(punto)) {
+                triangulosInvalidos.push_back(triangulo);
+            }
+        }
+
+        vector<Arista> cavidad;
+        for (const auto& triangulo : triangulosInvalidos) {
+            for (const auto& arista : aristasDeTriangulo(triangulo)) {
+                int apariciones = 0;
+                for (const auto& otroTriangulo : triangulosInvalidos) {
+                    if (triangulosIguales(triangulo, otroTriangulo)) {
+                        continue;
+                    }
+
+                    const auto aristasOtroTriangulo = aristasDeTriangulo(otroTriangulo);
+                    if (std::find(aristasOtroTriangulo.begin(), aristasOtroTriangulo.end(), arista) != aristasOtroTriangulo.end()) {
+                        ++apariciones;
+                    }
+                }
+
+                if (apariciones == 0) {
+                    cavidad.push_back(arista);
+                }
+            }
+        }
+
+        vector<Triangulo> triangulacionActualizada;
+        for (const auto& triangulo : triangulacion) {
+            bool esInvalido = false;
+            for (const auto& invalido : triangulosInvalidos) {
+                if (triangulosIguales(triangulo, invalido)) {
+                    esInvalido = true;
+                    break;
+                }
+            }
+
+            if (!esInvalido) {
+                triangulacionActualizada.push_back(triangulo);
+            }
+        }
+
+        triangulacion = triangulacionActualizada;
+
+        for (const auto& arista : cavidad) {
+            triangulacion.push_back(Triangulo(arista.p1, arista.p2, punto));
+        }
+    }
+
+    vector<Triangulo> triangulacionFinal;
+    for (const auto& triangulo : triangulacion) {
+        if (!contieneVerticeSuperTriangulo(triangulo, superTriangulo)) {
+            triangulacionFinal.push_back(triangulo);
+        }
+    }
+
+    return triangulacionFinal;
+}
+
+void imprimirTriangulacion(const vector<Triangulo>& triangulacion) {
+    std::cout << "Triangulacion final (" << triangulacion.size() << " triangulos):" << std::endl;
+    for (const auto& triangulo : triangulacion) {
+        triangulo.imprimir();
+    }
+}
 
 int main() {
-    std::cout << "circuncentro y circuncirculo" << std::endl;
-
-    Punto p1(0, 0);
-    Punto p2(25, 0);
-    Punto p3(12.5, 20);
-
-    Triangulo tri(p1, p2, p3);
-    tri.imprimir();
-
     try {
-        Punto centro = tri.circuncentro();
-        std::cout << "circuncentro: " << std::endl;
-        std::cout << " ";
-        centro.imprimir();
-        std::cout << std::endl;
+        vector<Punto> puntos = leerPuntos("puntos.txt");
 
-        Circuncirculo circ(tri);
-        circ.imprimir();
+        if (puntos.empty()) {
+            std::cerr << "No se pudieron leer puntos desde puntos.txt" << std::endl;
+            return 1;
+        }
 
-        Punto puntoDentro(12.5, 0);
-        Punto puntoFuera(40, 40);
-
-        std::cout << "Contiene (12.5, 0): " << (circ.contiene(puntoDentro) ? "si" : "no") << std::endl;
-        std::cout << "Contiene (40, 40): " << (circ.contiene(puntoFuera) ? "si" : "no") << std::endl;
+        vector<Triangulo> triangulacion = bowyerWatson(puntos);
+        imprimirTriangulacion(triangulacion);
     } catch (const std::exception& e) {
         std::cerr << e.what() << std::endl;
         return 1;
