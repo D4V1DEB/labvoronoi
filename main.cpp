@@ -56,6 +56,36 @@ vector<Arista> aristasDeTriangulo(const Triangulo& triangulo) {
     return {Arista(triangulo.a, triangulo.b), Arista(triangulo.b, triangulo.c), Arista(triangulo.c, triangulo.a)};
 }
 
+bool aristasIguales(const Arista& e1, const Arista& e2) {
+    return (e1.p1 == e2.p1 && e1.p2 == e2.p2) || (e1.p1 == e2.p2 && e1.p2 == e2.p1);
+}
+
+vector<Arista> construirCavidad(const vector<Triangulo>& triangulosInvalidos) {
+    vector<Arista> todasAristas;
+
+    for (const auto& triangulo : triangulosInvalidos) {
+        todasAristas.push_back(Arista(triangulo.a, triangulo.b));
+        todasAristas.push_back(Arista(triangulo.b, triangulo.c));
+        todasAristas.push_back(Arista(triangulo.c, triangulo.a));
+    }
+
+    vector<Arista> fronteras;
+    for (const auto& arista : todasAristas) {
+        int contador = 0;
+        for (const auto& otraArista : todasAristas) {
+            if (aristasIguales(arista, otraArista)) {
+                ++contador;
+            }
+        }
+
+        if (contador == 1) {
+            fronteras.push_back(arista);
+        }
+    }
+
+    return fronteras;
+}
+
 bool triangulosIguales(const Triangulo& primero, const Triangulo& segundo) {
     return primero.a == segundo.a && primero.b == segundo.b && primero.c == segundo.c;
 }
@@ -92,26 +122,7 @@ vector<Triangulo> bowyerWatson(const vector<Punto>& puntos) {
             triangulo.imprimir();
         }
 
-        vector<Arista> cavidad;
-        for (const auto& triangulo : triangulosInvalidos) {
-            for (const auto& arista : aristasDeTriangulo(triangulo)) {
-                int apariciones = 0;
-                for (const auto& otroTriangulo : triangulosInvalidos) {
-                    if (triangulosIguales(triangulo, otroTriangulo)) {
-                        continue;
-                    }
-
-                    const auto aristasOtroTriangulo = aristasDeTriangulo(otroTriangulo);
-                    if (std::find(aristasOtroTriangulo.begin(), aristasOtroTriangulo.end(), arista) != aristasOtroTriangulo.end()) {
-                        ++apariciones;
-                    }
-                }
-
-                if (apariciones == 0) {
-                    cavidad.push_back(arista);
-                }
-            }
-        }
+        vector<Arista> cavidad = construirCavidad(triangulosInvalidos);
 
         vector<Triangulo> triangulacionActualizada;
         for (const auto& triangulo : triangulacion) {
