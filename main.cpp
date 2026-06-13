@@ -96,7 +96,63 @@ bool contieneVerticeSuperTriangulo(const Triangulo& triangulo, const Triangulo& 
            triangulo.c == superTriangulo.a || triangulo.c == superTriangulo.b || triangulo.c == superTriangulo.c;
 }
 
-//actividad 6 retriangulacion
+bool comparten2Vertices(const Triangulo& t1, const Triangulo& t2) {
+    vector<Punto> vertices1 = {t1.a, t1.b, t1.c};
+    vector<Punto> vertices2 = {t2.a, t2.b, t2.c};
+    int comunes = 0;
+
+    for (const auto& vertice1 : vertices1) {
+        for (const auto& vertice2 : vertices2) {
+            if (vertice1 == vertice2) {
+                ++comunes;
+            }
+        }
+    }
+
+    return comunes == 2;
+}
+
+vector<Punto> obtenerVerticesVoronoiUnicos(const vector<Triangulo>& triangulacion) {
+    vector<Punto> verticesVoronoi;
+
+    for (const auto& triangulo : triangulacion) {
+        Punto circuncentro = triangulo.circuncentro();
+        if (std::find(verticesVoronoi.begin(), verticesVoronoi.end(), circuncentro) == verticesVoronoi.end()) {
+            verticesVoronoi.push_back(circuncentro);
+        }
+    }
+
+    return verticesVoronoi;
+}
+
+vector<Arista> construirVoronoi(const vector<Triangulo>& triangulacion) {
+    vector<Arista> aristasVoronoi;
+
+    for (size_t i = 0; i < triangulacion.size(); ++i) {
+        for (size_t j = i + 1; j < triangulacion.size(); ++j) {
+            const Triangulo& t1 = triangulacion[i];
+            const Triangulo& t2 = triangulacion[j];
+
+            if (comparten2Vertices(t1, t2)) {
+                Punto c1 = t1.circuncentro();
+                Punto c2 = t2.circuncentro();
+                aristasVoronoi.push_back(Arista(c1, c2));
+            }
+        }
+    }
+
+    return aristasVoronoi;
+}
+
+void imprimirReporteVoronoi(const vector<Punto>& puntos, const vector<Triangulo>& triangulacion) {
+    vector<Punto> verticesVoronoi = obtenerVerticesVoronoiUnicos(triangulacion);
+    vector<Arista> aristasVoronoi = construirVoronoi(triangulacion);
+
+    std::cout << "Número de regiones: " << puntos.size() << std::endl;
+    std::cout << "Número de vértices Voronoi: " << verticesVoronoi.size() << std::endl;
+    std::cout << "Número de aristas Voronoi: " << aristasVoronoi.size() << std::endl;
+}
+
 vector<Triangulo> bowyerWatson(const vector<Punto>& puntos) {
     if (puntos.empty()) {
         return {};
@@ -175,6 +231,7 @@ int main() {
 
         vector<Triangulo> triangulacion = bowyerWatson(puntos);
         imprimirTriangulacion(triangulacion);
+        imprimirReporteVoronoi(puntos, triangulacion);
     } catch (const std::exception& e) {
         std::cerr << e.what() << std::endl;
         return 1;
