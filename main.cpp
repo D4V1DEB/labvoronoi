@@ -96,6 +96,7 @@ bool contieneVerticeSuperTriangulo(const Triangulo& triangulo, const Triangulo& 
            triangulo.c == superTriangulo.a || triangulo.c == superTriangulo.b || triangulo.c == superTriangulo.c;
 }
 
+//actividad 6 retriangulacion
 vector<Triangulo> bowyerWatson(const vector<Punto>& puntos) {
     if (puntos.empty()) {
         return {};
