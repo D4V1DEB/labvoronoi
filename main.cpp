@@ -76,6 +76,8 @@ vector<Triangulo> bowyerWatson(const vector<Punto>& puntos) {
     triangulacion.push_back(superTriangulo);
 
     for (const auto& punto : puntos) {
+        punto.imprimir();
+
         vector<Triangulo> triangulosInvalidos;
 
         for (const auto& triangulo : triangulacion) {
@@ -83,6 +85,11 @@ vector<Triangulo> bowyerWatson(const vector<Punto>& puntos) {
             if (circulo.contiene(punto)) {
                 triangulosInvalidos.push_back(triangulo);
             }
+        }
+
+        std::cout << "Triangulos invalidos encontrados: " << triangulosInvalidos.size() << std::endl;
+        for (const auto& triangulo : triangulosInvalidos) {
+            triangulo.imprimir();
         }
 
         vector<Arista> cavidad;
